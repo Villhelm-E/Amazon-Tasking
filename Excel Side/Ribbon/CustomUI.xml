@@ -1,0 +1,15 @@
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
+    <ribbon>
+        <tabs>
+            <tab id="ontref" label="Ontario Refrigeration" insertAfterMso="TabHome">
+                <group id="data" label="Data">
+                    <button id="exportjson" label="Export JSON" image="JSON" size="large" onAction="CallbackExportJSON"/>
+                    <button id="update" label="Update Master Equipment List" imageMso="UpgradeWorkbook" size="large" onAction="CallbackImportEquipmentList"/>
+                </group>
+                <group id="about" label="About">
+                    <button id="version" label="Current Version" imageMso="Info" size="large" onAction="CallbackVersion"/>
+                </group>
+			</tab>
+        </tabs>
+    </ribbon>
+</customUI>

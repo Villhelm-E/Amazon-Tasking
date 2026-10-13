@@ -1,0 +1,400 @@
+Option Explicit
+
+'-------------------------------------------------------------------------------
+' OneDrive??VBA?Workbook.Path?URL??????????.
+' ??????OneDrive??????????????????????????.
+' Resolve the problem with Workbook.Path returning URL in VBA on OneDrive.
+' Refer to the OneDrive mount point information in the registry to get the local path.
+'
+' ??????Microsoft Scripting Runtime???????.
+' Check the "Microsoft Scripting Runtime" in the references dialog box.
+'
+' Arguments:
+'   UrlPath: URL Path (Required, String)
+'   UseCache: Use Mount Point Information Cache from Registry (Optional, Boolean)
+'             True  = Use cache (Default)
+'             False = Do not use cache
+'   DebugMode: Debug mode switch (Optional, Boolean)
+'             True  = Return mpiCache instead of local path (Debug Mode)
+'             False = Return local path (Default, Normal Mode)
+'
+' Return Value:
+'   Local Path (String)
+'   Return null string if conversion to local path fails
+'
+' Usage:
+'   Dim lp As String
+'   lp = GetLocalPath(ThisWorkbook.Path)
+'
+' Author: Excel VBA Diary (@excelvba_diary)
+' Created: December 29, 2023
+' Last Updated: April 10, 2024
+' Version: 1.007
+' License: MIT
+'-------------------------------------------------------------------------------
+
+Public Function GetLocalPath(urlPath As String, _
+                             Optional UseCache As Boolean = True, _
+                             Optional DebugMode As Boolean = False) As Variant
+    
+    If Not urlPath Like "http*" And DebugMode = False Then
+        GetLocalPath = urlPath
+        Exit Function
+    End If
+    
+    '????????????????????30???????????????????
+    'If no cache or more than 30 seconds since last update, the cache is updated
+    
+    Static mpiCache As Collection, lastUpdated As Date
+    
+    If Not (mpiCache Is Nothing Or Now - lastUpdated > 30 / 86400 Or UseCache = False) Then
+        GoTo Already_Updated
+    End If
+    
+    'STEP-1
+    '????????????OneDrive???????????
+    'Collect all OneDrive mount information from registory
+    
+    Const HKEY_CURRENT_USER As Long = &H80000001
+    Const S_HKEY_CURRENT_USER As String = "HKEY_CURRENT_USER\"
+    Const TARGET_KEY As String = "SOFTWARE\SyncEngines\Providers\OneDrive"
+    
+    Dim mpi As Dictionary
+    Set mpiCache = New Collection
+    
+    Dim objReg As Object
+    Set objReg = CreateObject("WbemScripting.SWbemLocator"). _
+                 ConnectServer(, "root\default").Get("StdRegProv")
+    
+    Dim objShell As Object
+    Set objShell = CreateObject("WScript.Shell")
+    
+    Dim subKeySet As Variant, subKey As Variant
+    Dim entryNameSet As Variant, entryName As Variant, entryValue As Variant
+    Dim entryPath As String
+    
+    objReg.EnumKey HKEY_CURRENT_USER, TARGET_KEY, subKeySet
+    If IsNull(subKeySet) Then Exit Function
+    
+    For Each subKey In subKeySet
+        '???????????????????
+        'collect all entry names and their values
+        objReg.EnumValues HKEY_CURRENT_USER, TARGET_KEY & "\" & subKey, entryNameSet
+        If Not IsNull(entryNameSet) Then
+            Set mpi = New Dictionary
+            mpi.Add "ID", subKey
+            For Each entryName In entryNameSet
+                entryPath = S_HKEY_CURRENT_USER & TARGET_KEY & "\" & subKey & "\" & entryName
+                entryValue = objShell.regRead(entryPath)
+                mpi.Add entryName, entryValue
+            Next
+            mpiCache.Add mpi
+            Set mpi = Nothing
+        End If
+    Next
+    
+    'STEP-2
+    'OneDrive?????????????????????
+    'Get OneDrive synchronization information to supplement mount information
+
+    Const SETTINGS_PATH As String = "\AppData\Local\Microsoft\OneDrive\Settings"
+    Const ODS_FOLDERS As String = "Business1,Business2,Personal"
+
+    Dim odsFolder As Variant, odsPath As String, odsIndex As Long, cid As String
+    Dim tempArray As Variant, tempFolder As String, j As Long, k As Long
+    For Each odsFolder In Split(ODS_FOLDERS, ",")
+        
+        odsPath = Environ("USERPROFILE") & SETTINGS_PATH & "\" & odsFolder & "\"
+        If Dir(odsPath) = "" Then GoTo Skip_Supplement
+        
+        cid = IniKeyValue(odsPath & "global.ini", "cid")
+        If cid = "" Then GoTo Skip_Supplement
+        
+        tempArray = IniToArray(odsPath & cid & ".ini")
+        If IsEmpty(tempArray) Then GoTo Skip_Supplement
+        
+        For j = LBound(tempArray) To UBound(tempArray)
+            Select Case tempArray(j)(0)
+                ' MySite or SharePoint site mounted by "Sync"
+                Case "libraryScope"
+                    For Each mpi In mpiCache
+                        If tempArray(j)(2) = mpi.Item("ID") Then
+                            If tempArray(j)(13) = mpi.Item("MountPoint") Then
+                                If tempArray(j)(4) = "MySite" Then
+                                    mpi.Add "RemotePath", ""
+                                Else
+                                    mpi.Add "RemoteFolder", ""
+                                End If
+                                Exit For
+                            End If
+                        End If
+                    Next
+                ' SharePoint site mounted by "Sync"
+                Case "libraryFolder"
+                    For Each mpi In mpiCache
+                        If tempArray(j)(3) = mpi.Item("ID") Then
+                            If tempArray(j)(5) = mpi.Item("MountPoint") Then
+                                mpi.Add "RemoteFolder", Trim(tempArray(j)(7))
+                                Exit For
+                            End If
+                        End If
+                    Next
+                ' SharePoint site mounted by "Add shortcut to OneDrive"
+                Case "AddedScope"
+                    For Each mpi In mpiCache
+                        If tempArray(j)(2) = mpi.Item("ID") Then
+                            If mpi.Item("UrlNamespace") Like tempArray(j)(4) & "*" Then
+                                mpi.Add "RemotePath", Trim(tempArray(j)(10))
+                                Exit For
+                            End If
+                        End If
+                    Next
+
+            End Select
+        Next
+
+Skip_Supplement:
+    Next
+    
+    lastUpdated = Now
+    
+
+Already_Updated:
+    
+    '???????????MPI????????
+    'Return mpi cache (mpiCache) if in debug mode
+    If DebugMode Then Set GetLocalPath = mpiCache: Exit Function
+    
+    '???OneDrive???????????????
+    'Exit if no valid OneDrive mount information
+    If mpiCache.Count = 0 Then Exit Function
+   
+    
+    'STEP-3
+    'OneDrive??????????URL??????????????
+    'Convert URL path to local path based on OneDrive mount information
+   
+    Dim strUrlNamespace As String, strLibraryType As String, strMountPoint As String
+    Dim subPath As String, tmpLocalPath As String
+    Dim mountFolderName As String, mountFolderPath As String
+    Dim returnDir As String, errNum As Long
+    Dim i As Long
+    
+    For Each mpi In mpiCache
+        
+        strUrlNamespace = mpi.Item("UrlNamespace")
+        If Right(strUrlNamespace, 1) = "/" Then
+            strUrlNamespace = Left(strUrlNamespace, Len(strUrlNamespace) - 1)
+        End If
+        
+        If urlPath Like strUrlNamespace & "*" Then
+        
+           subPath = Mid(urlPath, Len(strUrlNamespace) + 1)
+           subPath = Replace(subPath, "/", "\")
+           strMountPoint = mpi.Item("MountPoint")
+           
+           Select Case True
+           
+               ' personal account site
+               Case LCase(mpi.Item("ID")) = "personal"
+                   If subPath Like "\" & mpi.Item("CID") & "*" Then
+                      tmpLocalPath = strMountPoint & Mid(subPath, 18)
+                      GoTo Verify_Folder_Exists
+                   End If
+           
+               ' business account site
+               Case LCase(mpi.Item("ID")) Like "business#"
+                   tmpLocalPath = strMountPoint & subPath
+                   GoTo Verify_Folder_Exists
+           
+               ' My Site
+               Case LCase(mpi.Item("LibraryType")) = "mysite"
+                   tmpLocalPath = strMountPoint & subPath
+                   GoTo Verify_Folder_Exists
+               
+               ' SharePoint site mounted by "Add shortcut to OneDrive"
+               Case mpi.Exists("RemotePath")
+                   mountFolderPath = mpi.Item("RemotePath")
+                   If mountFolderPath <> "" Then
+                       mountFolderPath = "\" & Replace(mpi.Item("RemotePath"), "/", "\")
+                   End If
+                   If subPath Like mountFolderPath & "*" Then
+                       tmpLocalPath = strMountPoint & Mid(subPath, Len(mountFolderPath) + 1)
+                       GoTo Verify_Folder_Exists
+                   End If
+        
+               ' SharePoint site mounted by "Sync"
+               Case mpi.Exists("RemoteFolder")
+                   mountFolderName = mpi.Item("RemoteFolder")
+                   If mountFolderName = "" Then
+                       tmpLocalPath = strMountPoint & subPath
+                       GoTo Verify_Folder_Exists
+                   End If
+                   i = InStr(1, subPath & "\", "\" & mountFolderName & "\")
+                   If i > 0 Then
+                       subPath = Mid(subPath, i + Len(mountFolderName) + 1)
+                       tmpLocalPath = strMountPoint & subPath
+                       GoTo Verify_Folder_Exists
+                   End If
+   
+           End Select
+
+        End If
+    Next
+
+    'URL?????????????????????????????????
+    'Conversion to local path failed due to lack of mount information corresponding to URL path
+    Exit Function
+
+Verify_Folder_Exists:
+                   
+    'STEP-4
+    '??????????????????
+    'Verify that the folder actually exists
+    
+    On Error Resume Next
+    returnDir = Dir(tmpLocalPath, vbDirectory)
+    errNum = Err.Number
+    On Error GoTo 0
+    If errNum <> 0 Or returnDir = "" Then Exit Function
+
+    GetLocalPath = tmpLocalPath
+
+End Function
+
+
+'-------------------------------------------------------------------------------
+' INI????????????????????
+' Get the value of a specified key from an INI file
+'-------------------------------------------------------------------------------
+
+Public Function IniKeyValue(IniFilePath As String, keyName As String) As String
+    
+    If IniFilePath = "" Or Dir(IniFilePath) = "" Then
+        IniKeyValue = ""
+        Exit Function
+    End If
+    
+    'Reads INI file in UTF-16 format
+    Dim fileNumber As Long, byteBuf() As Byte, lineBuf As Variant
+    fileNumber = FreeFile
+    Open IniFilePath For Binary Access Read As #fileNumber
+    ReDim byteBuf(LOF(fileNumber) - 1)
+    Get #fileNumber, , byteBuf
+    lineBuf = Split(CStr(byteBuf), vbCrLf)
+    Close #fileNumber
+    
+    Dim i As Long, p As Long
+    For i = LBound(lineBuf) To UBound(lineBuf)
+        If LCase(lineBuf(i)) Like LCase(keyName) & "*" Then
+            p = InStr(lineBuf(i), "=")
+            If p = 0 Then Exit Function
+            IniKeyValue = Trim(Mid(lineBuf(i), p + 1))
+            Exit Function
+        End If
+    Next
+    
+    'The specified key was not found.
+    IniKeyValue = vbNullString
+
+End Function
+
+
+'-------------------------------------------------------------------------------
+' INI???????OneDrive???????????????
+' Open INI file and import OneDrive setting information into jag array
+'-------------------------------------------------------------------------------
+
+Public Function IniToArray(IniFilePath As String) As Variant
+    
+    If IniFilePath = "" Or Dir(IniFilePath) = "" Then
+        IniToArray = Empty
+        Exit Function
+    End If
+    
+    'Reads INI file in UTF-16 format
+    Dim fileNumber As Long, byteBuf() As Byte, lineBuf As Variant
+    fileNumber = FreeFile
+    Open IniFilePath For Binary Access Read As #fileNumber
+    ReDim byteBuf(LOF(fileNumber) - 1)
+    Get #fileNumber, , byteBuf
+    lineBuf = Split(CStr(byteBuf), vbCrLf)
+    Close #fileNumber
+    
+    Const TARGET_KEYS As String = "libraryScope,libraryFolder,AddedScope,library,dummy"
+    
+    Dim i As Long, j As Long, p As Long, entryBuf As String, keyName As String, keyBuf As Variant
+    Dim pArray() As Variant, pCount As Long
+    ReDim pArray(UBound(lineBuf)): pCount = 0
+    Dim cArray() As Variant, cCount As Long
+    
+    For i = 0 To UBound(lineBuf)
+        entryBuf = lineBuf(i)
+        p = InStr(entryBuf, "=")
+        If p = 0 Then GoTo Skip_Convert
+        keyName = Trim(Left(entryBuf, p - 1))
+        If InStr(TARGET_KEYS, keyName & ",") = 0 Then GoTo Skip_Convert
+        
+        ReDim cArray(0): cArray(0) = keyName
+        cCount = 1
+        j = p + 1
+        Do While j <= Len(entryBuf)
+            Select Case Mid(entryBuf, j, 1)
+                Case """"
+                    p = InStr(j + 1, entryBuf, """")
+                    If p = 0 Then p = Len(entryBuf) + 1
+                    ReDim Preserve cArray(cCount)
+                    cArray(cCount) = Mid(entryBuf, j + 1, p - j - 1)
+                    cCount = cCount + 1
+                    j = p + 1
+                Case " "
+                    j = j + 1
+                Case Else
+                    p = InStr(j + 1, entryBuf, " ")
+                    If p = 0 Then p = Len(entryBuf) + 1
+                    ReDim Preserve cArray(cCount)
+                    cArray(cCount) = Mid(entryBuf, j, p - j)
+                    cCount = cCount + 1
+                    j = p + 1
+            End Select
+        Loop
+        ReDim Preserve pArray(pCount)
+        pArray(pCount) = cArray
+        pCount = pCount + 1
+Skip_Convert:
+    Next
+    
+    IniToArray = pArray
+    
+End Function
+
+
+'-------------------------------------------------------------------------------
+' ??????
+' Test code for GetLocalPath
+'-------------------------------------------------------------------------------
+
+Private Sub Functional_Test_GetLocalPath()
+    Debug.Print "URL Path", ThisWorkbook.Path
+    Debug.Print "Local Path", GetLocalPath(ThisWorkbook.Path, False)
+End Sub
+
+Private Sub Speed_Test_GetLocalPath()
+    Dim i As Long, t1 As Single
+    t1 = Timer
+    For i = 1 To 100
+        Call GetLocalPath(ThisWorkbook.Path, False)     'Cache Disable
+    Next
+    Debug.Print "UseCache Disable: "; Format(Timer - t1, "#0.0000000"); " [Sec]"
+    t1 = Timer
+    For i = 1 To 100
+        Call GetLocalPath(ThisWorkbook.Path, True)      'Cache Enable
+    Next
+    Debug.Print "UseCache Enable:  "; Format(Timer - t1, "#0.0000000"); " [Sec]"
+End Sub
+
+'-------------------------------------------------------------------------------
+' ??????????????
+' The script for this module ends here
+'-------------------------------------------------------------------------------
+
