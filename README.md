@@ -39,6 +39,8 @@ I did video training sessions with the Service Manager, Service Supervisor, one 
 
 During the transition period, I had to convert their PDF equipment lists to spreadsheets, and in many cases fix their equipment lists and generate their Tasking for them. Amazon liked the design of my checklists so much they said they want to make it a required format for all Amazon sites.
 
+I created a manual with screenshots of all the steps the office needs to follow.
+
 ## Improvements
 I have two more features to add to the Master Equipment List. Currently, updating to new versions of the Master Equipment List spreadsheet is unacceptably involved. The process goes:
 1. I send out the new spreadsheet to everyone
