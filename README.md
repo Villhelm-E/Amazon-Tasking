@@ -41,14 +41,18 @@ During the transition period, I had to convert their PDF equipment lists to spre
 
 I created a manual with screenshots of all the steps the office needs to follow.
 
-## Improvements
-I have two more features to add to the Master Equipment List. Currently, updating to new versions of the Master Equipment List spreadsheet is unacceptably involved. The process goes:
-1. I send out the new spreadsheet to everyone
-2. They have to copy their master equipment list to the new spreadsheet without breaking conditional formatting
+## Planned Features
+I have three more features to add to the Master Equipment List. Currently, updating to new versions of the Master Equipment List spreadsheet is unacceptably involved. The process goes:
+1. I send out the new version of the spreadsheet to everyone
+2. They have to copy the existing master equipment list to the new spreadsheet without breaking the conditional formatting
 3. Save the new master equipment list
 4. Delete the old spreadsheet
+5. Rename their equipment list
 The first feature I plan to add, which I am currently coding, will allow the user to push a button in the ribbon and choose a master equipment list to import and automatically delete the old file.
 
-The second feature will be another custom ribbon button that will perform automated cleanup of the equipment list.
+The second feature I am working on will let the user click a button to import a tech's template equipment list. This will reduce the amount of manual work users currently have to do as well as reduce user error.
 
-The company is planning on replacing our ERP with a modern one in the near future. This new ERP will make this whole project obsolete, so I don't plan on adding more features.
+The third feature will be another custom ribbon button that will perform automated cleanup of the equipment list such as add lead zeros and alphabetize units.
+
+## End of Life
+The company is planning on replacing our ERP with a modern one in the near future. This new ERP will make this whole project obsolete, so I won't be adding new features for very long.
