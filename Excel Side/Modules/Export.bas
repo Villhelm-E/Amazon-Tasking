@@ -8,7 +8,6 @@ Public Sub JSON()
     Dim lrow As Long
     
     savename = "equipment_list.json"
-    'MyFile = Application.DefaultFilePath & "\" & savename
     MyFile = GetLocalPath(Application.ActiveWorkbook.Path) & "/" & savename
     
     Open MyFile For Output As #1
@@ -16,7 +15,7 @@ Public Sub JSON()
     Dim wks As Worksheet
     
     Set wkb = ThisWorkbook
-    Set wks = wkb.Sheets(1)
+    Set wks = wkb.Sheets("Equipment List")
     
     'Find last column
     lcolumn = wks.Cells(1, Columns.Count).End(xlToLeft).column
@@ -43,7 +42,7 @@ Public Sub JSON()
     Dim cell_value As String
     
     ' Category column is currently a constant
-    ' Todo: programmatically find the Category column
+    ' To-do: programmatically find the Category column
     Dim CATEGORY_COLUMN As Integer
     CATEGORY_COLUMN = 6 'Category is the 6th column
     
@@ -51,6 +50,12 @@ Public Sub JSON()
     For j = 2 To lrow
         ' Loop through columns
         For i = 1 To lcolumn
+            ' Warn user about address issues before exporting the JSON
+            If IsError(wks.Cells(j, i)) Or wks.Cells(j, i) = "0" Then
+                MsgBox wks.Cells(j, 1).Value & " is missing address information. Make sure the site is in the Addresses tab and every unit has address information.", vbOKOnly, "Address Issue"
+                End
+            End If
+            
             cell_value = wks.Cells(j, i)
             
             If i <> lcolumn Then

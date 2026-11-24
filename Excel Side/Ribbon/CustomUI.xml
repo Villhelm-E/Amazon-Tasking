@@ -4,12 +4,13 @@
             <tab id="ontref" label="Ontario Refrigeration" insertAfterMso="TabHome">
                 <group id="data" label="Data">
                     <button id="exportjson" label="Export JSON" image="JSON" size="large" onAction="CallbackExportJSON"/>
+                    <button id="import" label="Import Site" imageMso="NewTableStyleWord" size="large" onAction="CallbackImportSite"/>
                     <button id="update" label="Update Master Equipment List" imageMso="UpgradeWorkbook" size="large" onAction="CallbackImportEquipmentList"/>
                 </group>
                 <group id="about" label="About">
                     <button id="version" label="Current Version" imageMso="Info" size="large" onAction="CallbackVersion"/>
                 </group>
-			</tab>
+		    </tab>
         </tabs>
     </ribbon>
 </customUI>

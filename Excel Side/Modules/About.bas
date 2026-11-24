@@ -1,10 +1,10 @@
 Option Explicit
 
-Public Sub Version()
+Public Function GetVersion() As String
 
     Dim CurrentVersion As String
-    CurrentVersion = "3.6"
+    CurrentVersion = "3.7"
     
-    MsgBox "Current version: " & CurrentVersion, vbInformation, "Current Version"
+    GetVersion = CurrentVersion
 
-End Sub
+End Function

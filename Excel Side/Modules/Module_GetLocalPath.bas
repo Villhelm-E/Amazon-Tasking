@@ -1,400 +1,350 @@
 Option Explicit
 
-'-------------------------------------------------------------------------------
-' OneDrive??VBA?Workbook.Path?URL??????????.
-' ??????OneDrive??????????????????????????.
-' Resolve the problem with Workbook.Path returning URL in VBA on OneDrive.
-' Refer to the OneDrive mount point information in the registry to get the local path.
-'
-' ??????Microsoft Scripting Runtime???????.
-' Check the "Microsoft Scripting Runtime" in the references dialog box.
-'
-' Arguments:
-'   UrlPath: URL Path (Required, String)
-'   UseCache: Use Mount Point Information Cache from Registry (Optional, Boolean)
-'             True  = Use cache (Default)
-'             False = Do not use cache
-'   DebugMode: Debug mode switch (Optional, Boolean)
-'             True  = Return mpiCache instead of local path (Debug Mode)
-'             False = Return local path (Default, Normal Mode)
-'
-' Return Value:
-'   Local Path (String)
-'   Return null string if conversion to local path fails
-'
-' Usage:
-'   Dim lp As String
-'   lp = GetLocalPath(ThisWorkbook.Path)
-'
-' Author: Excel VBA Diary (@excelvba_diary)
-' Created: December 29, 2023
-' Last Updated: April 10, 2024
-' Version: 1.007
-' License: MIT
-'-------------------------------------------------------------------------------
+Public Sub UpdateMasterEquipmentList()
 
-Public Function GetLocalPath(urlPath As String, _
-                             Optional UseCache As Boolean = True, _
-                             Optional DebugMode As Boolean = False) As Variant
+    Dim OldEquipmentList As Workbook
+    Dim Response
+    Dim source As String
+    Set SourceWorkbook = RequestWorkbook("Master Equipment List")
+    source = SourceWorkbook.name
     
-    If Not urlPath Like "http*" And DebugMode = False Then
-        GetLocalPath = urlPath
-        Exit Function
-    End If
+    'Only transfer data if user chose a document.
+    If Not SourceWorkbook Is Nothing Then
     
-    '????????????????????30???????????????????
-    'If no cache or more than 30 seconds since last update, the cache is updated
+        ' Check if chosen file is a master equipment list
+        If WorksheetExists("Filters and Belts", SourceWorkbook) Then
+            Dim SourceWorksheet As Worksheet
+            Set SourceWorksheet = SourceWorkbook.Sheets("Equipment List")
+            
+            ' Check if equipment list is blank
+            If FindLast(SourceWorksheet, "Row") > 1 Then
+                ' Start the import
+                Call UpdateEquipmentList(SourceWorkbook)
     
-    Static mpiCache As Collection, lastUpdated As Date
-    
-    If Not (mpiCache Is Nothing Or Now - lastUpdated > 30 / 86400 Or UseCache = False) Then
-        GoTo Already_Updated
-    End If
-    
-    'STEP-1
-    '????????????OneDrive???????????
-    'Collect all OneDrive mount information from registory
-    
-    Const HKEY_CURRENT_USER As Long = &H80000001
-    Const S_HKEY_CURRENT_USER As String = "HKEY_CURRENT_USER\"
-    Const TARGET_KEY As String = "SOFTWARE\SyncEngines\Providers\OneDrive"
-    
-    Dim mpi As Dictionary
-    Set mpiCache = New Collection
-    
-    Dim objReg As Object
-    Set objReg = CreateObject("WbemScripting.SWbemLocator"). _
-                 ConnectServer(, "root\default").Get("StdRegProv")
-    
-    Dim objShell As Object
-    Set objShell = CreateObject("WScript.Shell")
-    
-    Dim subKeySet As Variant, subKey As Variant
-    Dim entryNameSet As Variant, entryName As Variant, entryValue As Variant
-    Dim entryPath As String
-    
-    objReg.EnumKey HKEY_CURRENT_USER, TARGET_KEY, subKeySet
-    If IsNull(subKeySet) Then Exit Function
-    
-    For Each subKey In subKeySet
-        '???????????????????
-        'collect all entry names and their values
-        objReg.EnumValues HKEY_CURRENT_USER, TARGET_KEY & "\" & subKey, entryNameSet
-        If Not IsNull(entryNameSet) Then
-            Set mpi = New Dictionary
-            mpi.Add "ID", subKey
-            For Each entryName In entryNameSet
-                entryPath = S_HKEY_CURRENT_USER & TARGET_KEY & "\" & subKey & "\" & entryName
-                entryValue = objShell.regRead(entryPath)
-                mpi.Add entryName, entryValue
-            Next
-            mpiCache.Add mpi
-            Set mpi = Nothing
+                ' Close customer workbook
+                ' SourceWorkbook.Close
+        
+                ' Inform the user that the import completed.
+                Response = MsgBox("Master Equipment List has been imported. Do you want to delete the old version?", vbYesNo, "Update Status")
+                
+                If Response = vbYes Then
+                    ' delete old file
+                    ' rename this one
+                    Call RenameSelf(source)
+                    MsgBox "Equipment list has been updated.", vbOKOnly, "Update"
+                Else
+                    MsgBox "The old master equipment list, '" & source & "', was not deleted." & vbNewLine & vbNewLine & _
+                    "The new equipment list is now '" & ThisWorkbook.name & "'.", vbOKOnly, "Old Equipment List was not deleted"
+                End If
+            Else
+                ' If equipment list is blank, let the user know and stop
+                MsgBox "The chosen Master Equipment List is empty. Nothing to import."
+            End If
+        Else
+            MsgBox "Not an Equipment List. Please choose another file.", vbOKOnly, "Invalid file"
+            SourceWorkbook.Close
+            End
         End If
-    Next
-    
-    'STEP-2
-    'OneDrive?????????????????????
-    'Get OneDrive synchronization information to supplement mount information
 
-    Const SETTINGS_PATH As String = "\AppData\Local\Microsoft\OneDrive\Settings"
-    Const ODS_FOLDERS As String = "Business1,Business2,Personal"
-
-    Dim odsFolder As Variant, odsPath As String, odsIndex As Long, cid As String
-    Dim tempArray As Variant, tempFolder As String, j As Long, k As Long
-    For Each odsFolder In Split(ODS_FOLDERS, ",")
-        
-        odsPath = Environ("USERPROFILE") & SETTINGS_PATH & "\" & odsFolder & "\"
-        If Dir(odsPath) = "" Then GoTo Skip_Supplement
-        
-        cid = IniKeyValue(odsPath & "global.ini", "cid")
-        If cid = "" Then GoTo Skip_Supplement
-        
-        tempArray = IniToArray(odsPath & cid & ".ini")
-        If IsEmpty(tempArray) Then GoTo Skip_Supplement
-        
-        For j = LBound(tempArray) To UBound(tempArray)
-            Select Case tempArray(j)(0)
-                ' MySite or SharePoint site mounted by "Sync"
-                Case "libraryScope"
-                    For Each mpi In mpiCache
-                        If tempArray(j)(2) = mpi.Item("ID") Then
-                            If tempArray(j)(13) = mpi.Item("MountPoint") Then
-                                If tempArray(j)(4) = "MySite" Then
-                                    mpi.Add "RemotePath", ""
-                                Else
-                                    mpi.Add "RemoteFolder", ""
-                                End If
-                                Exit For
-                            End If
-                        End If
-                    Next
-                ' SharePoint site mounted by "Sync"
-                Case "libraryFolder"
-                    For Each mpi In mpiCache
-                        If tempArray(j)(3) = mpi.Item("ID") Then
-                            If tempArray(j)(5) = mpi.Item("MountPoint") Then
-                                mpi.Add "RemoteFolder", Trim(tempArray(j)(7))
-                                Exit For
-                            End If
-                        End If
-                    Next
-                ' SharePoint site mounted by "Add shortcut to OneDrive"
-                Case "AddedScope"
-                    For Each mpi In mpiCache
-                        If tempArray(j)(2) = mpi.Item("ID") Then
-                            If mpi.Item("UrlNamespace") Like tempArray(j)(4) & "*" Then
-                                mpi.Add "RemotePath", Trim(tempArray(j)(10))
-                                Exit For
-                            End If
-                        End If
-                    Next
-
-            End Select
-        Next
-
-Skip_Supplement:
-    Next
-    
-    lastUpdated = Now
-    
-
-Already_Updated:
-    
-    '???????????MPI????????
-    'Return mpi cache (mpiCache) if in debug mode
-    If DebugMode Then Set GetLocalPath = mpiCache: Exit Function
-    
-    '???OneDrive???????????????
-    'Exit if no valid OneDrive mount information
-    If mpiCache.Count = 0 Then Exit Function
-   
-    
-    'STEP-3
-    'OneDrive??????????URL??????????????
-    'Convert URL path to local path based on OneDrive mount information
-   
-    Dim strUrlNamespace As String, strLibraryType As String, strMountPoint As String
-    Dim subPath As String, tmpLocalPath As String
-    Dim mountFolderName As String, mountFolderPath As String
-    Dim returnDir As String, errNum As Long
-    Dim i As Long
-    
-    For Each mpi In mpiCache
-        
-        strUrlNamespace = mpi.Item("UrlNamespace")
-        If Right(strUrlNamespace, 1) = "/" Then
-            strUrlNamespace = Left(strUrlNamespace, Len(strUrlNamespace) - 1)
-        End If
-        
-        If urlPath Like strUrlNamespace & "*" Then
-        
-           subPath = Mid(urlPath, Len(strUrlNamespace) + 1)
-           subPath = Replace(subPath, "/", "\")
-           strMountPoint = mpi.Item("MountPoint")
-           
-           Select Case True
-           
-               ' personal account site
-               Case LCase(mpi.Item("ID")) = "personal"
-                   If subPath Like "\" & mpi.Item("CID") & "*" Then
-                      tmpLocalPath = strMountPoint & Mid(subPath, 18)
-                      GoTo Verify_Folder_Exists
-                   End If
-           
-               ' business account site
-               Case LCase(mpi.Item("ID")) Like "business#"
-                   tmpLocalPath = strMountPoint & subPath
-                   GoTo Verify_Folder_Exists
-           
-               ' My Site
-               Case LCase(mpi.Item("LibraryType")) = "mysite"
-                   tmpLocalPath = strMountPoint & subPath
-                   GoTo Verify_Folder_Exists
-               
-               ' SharePoint site mounted by "Add shortcut to OneDrive"
-               Case mpi.Exists("RemotePath")
-                   mountFolderPath = mpi.Item("RemotePath")
-                   If mountFolderPath <> "" Then
-                       mountFolderPath = "\" & Replace(mpi.Item("RemotePath"), "/", "\")
-                   End If
-                   If subPath Like mountFolderPath & "*" Then
-                       tmpLocalPath = strMountPoint & Mid(subPath, Len(mountFolderPath) + 1)
-                       GoTo Verify_Folder_Exists
-                   End If
-        
-               ' SharePoint site mounted by "Sync"
-               Case mpi.Exists("RemoteFolder")
-                   mountFolderName = mpi.Item("RemoteFolder")
-                   If mountFolderName = "" Then
-                       tmpLocalPath = strMountPoint & subPath
-                       GoTo Verify_Folder_Exists
-                   End If
-                   i = InStr(1, subPath & "\", "\" & mountFolderName & "\")
-                   If i > 0 Then
-                       subPath = Mid(subPath, i + Len(mountFolderName) + 1)
-                       tmpLocalPath = strMountPoint & subPath
-                       GoTo Verify_Folder_Exists
-                   End If
-   
-           End Select
-
-        End If
-    Next
-
-    'URL?????????????????????????????????
-    'Conversion to local path failed due to lack of mount information corresponding to URL path
-    Exit Function
-
-Verify_Folder_Exists:
-                   
-    'STEP-4
-    '??????????????????
-    'Verify that the folder actually exists
-    
-    On Error Resume Next
-    returnDir = Dir(tmpLocalPath, vbDirectory)
-    errNum = Err.Number
-    On Error GoTo 0
-    If errNum <> 0 Or returnDir = "" Then Exit Function
-
-    GetLocalPath = tmpLocalPath
-
-End Function
-
-
-'-------------------------------------------------------------------------------
-' INI????????????????????
-' Get the value of a specified key from an INI file
-'-------------------------------------------------------------------------------
-
-Public Function IniKeyValue(IniFilePath As String, keyName As String) As String
-    
-    If IniFilePath = "" Or Dir(IniFilePath) = "" Then
-        IniKeyValue = ""
-        Exit Function
+        ' Close customer workbook
+        SourceWorkbook.Close
+    Else
+        MsgBox "No file chosen", vbOKOnly, "Update Canceled"
     End If
-    
-    'Reads INI file in UTF-16 format
-    Dim fileNumber As Long, byteBuf() As Byte, lineBuf As Variant
-    fileNumber = FreeFile
-    Open IniFilePath For Binary Access Read As #fileNumber
-    ReDim byteBuf(LOF(fileNumber) - 1)
-    Get #fileNumber, , byteBuf
-    lineBuf = Split(CStr(byteBuf), vbCrLf)
-    Close #fileNumber
-    
-    Dim i As Long, p As Long
-    For i = LBound(lineBuf) To UBound(lineBuf)
-        If LCase(lineBuf(i)) Like LCase(keyName) & "*" Then
-            p = InStr(lineBuf(i), "=")
-            If p = 0 Then Exit Function
-            IniKeyValue = Trim(Mid(lineBuf(i), p + 1))
-            Exit Function
-        End If
-    Next
-    
-    'The specified key was not found.
-    IniKeyValue = vbNullString
 
-End Function
-
-
-'-------------------------------------------------------------------------------
-' INI???????OneDrive???????????????
-' Open INI file and import OneDrive setting information into jag array
-'-------------------------------------------------------------------------------
-
-Public Function IniToArray(IniFilePath As String) As Variant
-    
-    If IniFilePath = "" Or Dir(IniFilePath) = "" Then
-        IniToArray = Empty
-        Exit Function
-    End If
-    
-    'Reads INI file in UTF-16 format
-    Dim fileNumber As Long, byteBuf() As Byte, lineBuf As Variant
-    fileNumber = FreeFile
-    Open IniFilePath For Binary Access Read As #fileNumber
-    ReDim byteBuf(LOF(fileNumber) - 1)
-    Get #fileNumber, , byteBuf
-    lineBuf = Split(CStr(byteBuf), vbCrLf)
-    Close #fileNumber
-    
-    Const TARGET_KEYS As String = "libraryScope,libraryFolder,AddedScope,library,dummy"
-    
-    Dim i As Long, j As Long, p As Long, entryBuf As String, keyName As String, keyBuf As Variant
-    Dim pArray() As Variant, pCount As Long
-    ReDim pArray(UBound(lineBuf)): pCount = 0
-    Dim cArray() As Variant, cCount As Long
-    
-    For i = 0 To UBound(lineBuf)
-        entryBuf = lineBuf(i)
-        p = InStr(entryBuf, "=")
-        If p = 0 Then GoTo Skip_Convert
-        keyName = Trim(Left(entryBuf, p - 1))
-        If InStr(TARGET_KEYS, keyName & ",") = 0 Then GoTo Skip_Convert
-        
-        ReDim cArray(0): cArray(0) = keyName
-        cCount = 1
-        j = p + 1
-        Do While j <= Len(entryBuf)
-            Select Case Mid(entryBuf, j, 1)
-                Case """"
-                    p = InStr(j + 1, entryBuf, """")
-                    If p = 0 Then p = Len(entryBuf) + 1
-                    ReDim Preserve cArray(cCount)
-                    cArray(cCount) = Mid(entryBuf, j + 1, p - j - 1)
-                    cCount = cCount + 1
-                    j = p + 1
-                Case " "
-                    j = j + 1
-                Case Else
-                    p = InStr(j + 1, entryBuf, " ")
-                    If p = 0 Then p = Len(entryBuf) + 1
-                    ReDim Preserve cArray(cCount)
-                    cArray(cCount) = Mid(entryBuf, j, p - j)
-                    cCount = cCount + 1
-                    j = p + 1
-            End Select
-        Loop
-        ReDim Preserve pArray(pCount)
-        pArray(pCount) = cArray
-        pCount = pCount + 1
-Skip_Convert:
-    Next
-    
-    IniToArray = pArray
-    
-End Function
-
-
-'-------------------------------------------------------------------------------
-' ??????
-' Test code for GetLocalPath
-'-------------------------------------------------------------------------------
-
-Private Sub Functional_Test_GetLocalPath()
-    Debug.Print "URL Path", ThisWorkbook.Path
-    Debug.Print "Local Path", GetLocalPath(ThisWorkbook.Path, False)
 End Sub
 
-Private Sub Speed_Test_GetLocalPath()
-    Dim i As Long, t1 As Single
-    t1 = Timer
-    For i = 1 To 100
-        Call GetLocalPath(ThisWorkbook.Path, False)     'Cache Disable
-    Next
-    Debug.Print "UseCache Disable: "; Format(Timer - t1, "#0.0000000"); " [Sec]"
-    t1 = Timer
-    For i = 1 To 100
-        Call GetLocalPath(ThisWorkbook.Path, True)      'Cache Enable
-    Next
-    Debug.Print "UseCache Enable:  "; Format(Timer - t1, "#0.0000000"); " [Sec]"
+Public Sub AddSite()
+
+    ' Open the equipment list template file
+    Dim wb As Workbook
+    Set SourceWorkbook = RequestWorkbook("Equipment List Template")
+    
+    Dim SourceSheet As Worksheet
+    Dim TargetSheet As Worksheet
+    Dim LastRow As Integer
+    
+    ' Check if chosen file is an equipment list template
+    If SourceWorkbook.Sheets(1).name = "Equipment List" And SourceWorkbook.Sheets(2).name = "Unit Types" And SourceWorkbook.Sheets("Equipment List").Cells(1, 1).Value = "Site: " And _
+    SourceWorkbook.Sheets("Equipment List").Cells(1, 3).Value = "Tech: " And SourceWorkbook.Sheets("Equipment List").Cells(1, 7).Value = "Date: " Then
+        
+        ' Grab the site name from the equipment list
+        Dim SiteName As String
+        SiteName = SourceWorkbook.Worksheets("Equipment List").Cells(1, 2).Value
+        
+        ' Check if the site is already in the equipment list
+        Dim ColumnCount As Integer, RowCount As Integer
+        
+        Set SourceSheet = SourceWorkbook.Sheets("Equipment List")
+        Set TargetSheet = ThisWorkbook.Sheets("Equipment List")
+            
+        'Check if template is blank
+        If FindLast(SourceSheet, "Row") > 2 Then
+            
+            LastRow = FindLastRow(TargetSheet, "A", "*")
+            
+            If WorksheetFunction.CountIf(Range("A:A"), SiteName) > 0 Then
+                'Ask user if they are importing a split equipment list
+                Dim user_val
+                user_val = MsgBox(SiteName & " is already in the equipment list. Are you importing a split equipment list?", vbYesNo, SiteName & " already exists")
+                
+                If user_val = vbNo Then
+                    MsgBox SiteName & " is already in the equipment list."
+                Else
+                    ' Disable screen updating
+                    Application.ScreenUpdating = False
+                    
+                    Set SourceSheet = SourceWorkbook.Sheets("Equipment List")
+                    Set TargetSheet = ThisWorkbook.Sheets("Equipment List")
+                    
+                    ' Copy every column from SourceSheet into TargetSheet
+                    Call MigrateEquipmentList(SourceSheet, TargetSheet)
+                    
+                    ' Add the site name, address, and site type to Addresses worksheet
+                    Dim UnitCount As Integer, StartRow As Integer, SiteRow As Integer
+                    Dim SiteAddress As String, SiteType As String
+                    
+                    'Count number of units in template
+                    SourceSheet.Activate
+                    UnitCount = FindLast(SourceSheet, "Row") - 2
+                    
+                    ' Activate Addresses sheet to find site address info
+                    Set TargetSheet = ThisWorkbook.Sheets("Addresses")
+                    TargetSheet.Activate
+                    
+                    ' Lookup site and address info
+                    SiteRow = FindLastRow(TargetSheet, "A", SiteName)
+                    SiteType = Cells(SiteRow, 2)
+                    SiteAddress = Cells(SiteRow, 3)
+                    
+                    ' Calculate range for migrating
+                    StartRow = LastRow + 1
+                    LastRow = StartRow + UnitCount - 1
+                    
+                    Set TargetSheet = ThisWorkbook.Sheets("Equipment List")
+                    TargetSheet.Activate
+                    
+                    ' Migrate the address info
+                    Call MigrateAddress(StartRow, LastRow, SiteName, SiteAddress, SiteType)
+                    
+                    ' Final cleanup
+                    SourceWorkbook.Close
+                    
+                    ' Go to the appropriate row
+                    Set TargetSheet = ThisWorkbook.Worksheets("Equipment List")
+                    TargetSheet.Activate
+                    
+                    Application.GoTo Reference:=Range("A" & LastRow - 14), Scroll:=True
+                    Application.GoTo Reference:=Range("A" & LastRow + 1), Scroll:=False
+                    
+                    ' Enable screen updating
+                    Application.ScreenUpdating = True
+                End If
+            Else
+                ' Show the import menu
+                NewSite.Show
+            End If
+        Else
+            ' If the equipment list is blank, let the user know and stop.
+            MsgBox "The chosen equipment list is blank. Nothing to import."
+        End If
+    Else
+        ' Cancel the import if user didn't choose a valid file
+        SourceWorkbook.Close
+        MsgBox "This is not an Equipment List Template. Please choose a different file.", vbOKOnly, "Invalid file"
+        End
+    End If
+
 End Sub
 
-'-------------------------------------------------------------------------------
-' ??????????????
-' The script for this module ends here
-'-------------------------------------------------------------------------------
+Public Sub MigrateEquipmentList(SourceSheet As Worksheet, TargetSheet As Worksheet)
 
+    ' Variables
+    Dim ColumnCount As Integer, RowCount As Integer, LastRow As Integer
+    
+    ' Count number of columns in source sheet
+    SourceSheet.Activate
+    ColumnCount = CountColumns("2:2")
+    
+    ' Count number of rows in SourceSheet
+    TargetSheet.Activate
+    RowCount = FindLast(SourceSheet, "Row") - 2
+    
+    ' Find last row with a Site Name
+    LastRow = FindLast(TargetSheet, "Row")
+    
+    ' Special case if equipment list is empty
+    If LastRow > 1 Then
+        ' Insert rows so that cells have dropdowns
+        Range(LastRow + 1 & ":" & LastRow + RowCount).EntireRow.Insert
+        ' But skip a row so that if the heade row is the only row,
+        ' Have to delete the skipped row so that the pasted rows are first
+        Range(LastRow + 1 & ":" & LastRow + 1).EntireRow.Delete
+    Else
+        ' If equipment list is empty, have to start at row 3 to avoid the header formatting applying to all inserted rows
+        Range("3:" & LastRow + RowCount).EntireRow.Insert
+        Range("2:2").EntireRow.Delete
+    End If
+    
+    ' Loop through columns
+    Dim i As Integer
+    For i = 1 To ColumnCount
+        ' Copy and paste from SourceSheet to TargetSheet
+        SourceSheet.Activate
+        Call MigrateColumn(Cells(2, i).Value, SourceSheet, TargetSheet, 2, 3, LastRow + 1)
+    Next i
+
+End Sub
+
+Public Sub MigrateAddress(StartRow As Integer, LastRow As Integer, SiteName As String, SiteAddress As String, SiteType As String)
+
+    Range(Cells(StartRow, 1), Cells(LastRow, 1)).Value = SiteName
+    Range(Cells(StartRow, 2), Cells(LastRow, 2)).Value = SiteAddress
+    Range(Cells(StartRow, 3), Cells(LastRow, 3)).formula = SiteType
+
+End Sub
+
+' This function manually calls an import function for each worksheet in the workbook
+Private Sub UpdateEquipmentList(SourceWorkbook As Workbook)
+
+    Application.ScreenUpdating = False
+
+    ' Update the Address Sheet
+    Call ImportAddress(SourceWorkbook, SourceWorkbook.Sheets("Addresses"), ThisWorkbook.Sheets("Addresses"))
+    
+    ' Update the Filters and Belts Sheet
+'    Call ImportFiltersBelts(SourceWorkbook, SourceWorkbook.Sheets("Filters and Belts"), ThisWorkbook.Sheets("Filters and Belts"))
+    
+    ' Update the Unit Types Sheet
+    Call ImportUnitTypes(SourceWorkbook, SourceWorkbook.Sheets("Unit Types"), ThisWorkbook.Sheets("Unit Types"))
+    
+    ' Update the Equipment List Sheet
+    Call ImportEquipmentList(SourceWorkbook, SourceWorkbook.Sheets("Equipment List"), ThisWorkbook.Sheets("Equipment List"))
+    
+    Application.ScreenUpdating = True
+
+End Sub
+
+' Function copies the column with the ColumnHeader to the TargetWorksheet
+' The default pastes as values, KeepFormatting boolean will paste formatting
+Public Function MigrateColumn(ColumnHeader As String, SourceSheet As Worksheet, TargetSheet As Worksheet, Optional HeaderRow As Integer, Optional CopyStartRow As Integer, Optional PasteStartRow As Integer, Optional ApplyFormula As Boolean)
+
+    ' Define variables
+    Dim SourceColumn As Integer, TargetColumn As Integer
+    
+    SourceSheet.Activate
+    SourceColumn = ColumnLookup(SourceSheet, ColumnHeader, HeaderRow)
+    
+    TargetSheet.Activate
+    TargetColumn = ColumnLookup(TargetSheet, ColumnHeader, 1) 'changed 1 to 2
+    
+    ' Find the last row with data
+    Dim tbl As ListObject
+    Dim LastRow As Long
+    
+    SourceSheet.Activate
+    LastRow = FindLast(SourceSheet, "Row")
+    
+    ' If header doesn't exist in TargetSheet, add to the end of the headers
+    If TargetColumn = 0 Then
+        TargetColumn = CountColumns("1:1") + 1
+        CopyStartRow = 1
+    End If
+    
+    ' If CopyStartRow is blank, assume row below header
+    If CopyStartRow = 0 Then
+        CopyStartRow = HeaderRow + 1
+    End If
+    
+    ' If PasteStartRow is blank, assume row below header
+    If PasteStartRow = 0 Then
+        PasteStartRow = HeaderRow + 1
+    End If
+    
+    ' Copy range from SourceSheet if column is not empty
+    If LastRow > 1 Then
+        SourceSheet.Activate
+        SourceSheet.Range(Cells(CopyStartRow, SourceColumn).Address, Cells(LastRow, SourceColumn).Address).Copy
+        
+        ' Paste range in New Workbook
+        TargetSheet.Activate
+        
+        ' If ApplyFormula is true, then add a formula to the range instead of paste
+        If ApplyFormula Then
+            TargetSheet.Range(Cells(PasteStartRow, SourceColumn).Address, Cells(LastRow, SourceColumn).Address).formula = "=INDEX(Addresses!$B:$B,MATCH($A2,Addresses!$A:$A,0))"
+        Else
+            TargetSheet.Range(Cells(PasteStartRow, TargetColumn).Address).PasteSpecial xlPasteValues
+        End If
+    End If
+    
+    Application.CutCopyMode = False
+
+End Function
+
+' This function copies the equipment list from source worksheet and pastes in target worksheet
+Private Sub ImportEquipmentList(SourceWorkbook As Workbook, SourceSheet As Worksheet, TargetSheet As Worksheet)
+    
+    ' Define variables
+    Dim Columns As Integer
+    SourceSheet.Activate
+    Columns = CountColumns("1:1")
+    
+    ' Loop through columns
+    Dim i As Integer
+    For i = 1 To Columns
+        ' If column header is "Site Type", enter formula instead of copy/paste
+        If Cells(1, i).Value = "Site Type" Then
+            SourceSheet.Activate
+            Call MigrateColumn(Cells(1, i).Value, SourceSheet, TargetSheet, , , , True)
+        Else
+            ' Copy and paste from sourcesheet to targetsheet
+            SourceSheet.Activate
+            Call MigrateColumn(Cells(1, i).Value, SourceSheet, TargetSheet)
+        End If
+    Next i
+    
+    ' Final cleanup
+    Application.Range("A1").Select
+
+End Sub
+
+' This function copies the addresses from source worksheet and pastes in target worksheet
+Private Sub ImportAddress(SourceWorkbook As Workbook, SourceSheet As Worksheet, TargetSheet As Worksheet)
+
+    ' Define variables
+    Dim Columns As Integer
+    SourceSheet.Activate
+    
+    Columns = CountColumns("1:1")
+    
+    ' Loop through columns
+    Dim i As Integer
+    For i = 1 To Columns
+        SourceSheet.Activate
+        Call MigrateColumn(Cells(1, i).Value, SourceSheet, TargetSheet)
+    Next i
+    
+    Application.Range("A1").Select
+
+End Sub
+
+' This function copies the unit types from source worksheet and pastes in target worksheet
+Private Sub ImportUnitTypes(SourceWorkbook As Workbook, SourceSheet As Worksheet, TargetSheet As Worksheet)
+
+    ' Define variables
+    Dim LastColumn
+    LastColumn = SourceSheet.Cells(1, SourceSheet.Columns.Count).End(xlToLeft).column
+    
+    ' Age Threshold is the only value that needs to be migrated for now
+    SourceSheet.Activate
+    Call MigrateColumn(Cells(1, LastColumn).Value, SourceSheet, TargetSheet)
+    
+    Application.Range("A1").Select
+
+End Sub
+
+Private Sub ImportFiltersBelts(SourceWorkbook As Workbook, SourceSheet As Worksheet, TargetSheet As Worksheet)
+
+    ' Probably not necessary
+
+End Sub

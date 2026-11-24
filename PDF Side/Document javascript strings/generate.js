@@ -4,6 +4,7 @@ function generateTasking() {
     ////////////
     // Choose PM
     ////////////
+
     // Get PM name from field
     chosen_pm = getField("pm").value;
     
@@ -13,6 +14,7 @@ function generateTasking() {
     //////////////
     // Choose Site
     //////////////
+
     // Filter sites based on Site dropdown
     var chosenSite = units.filter(function (e) {
         return e.Site == getField("customer").value;
@@ -22,11 +24,15 @@ function generateTasking() {
     // Special PM cases
     ////////////////////////////////
 
-    //If PM chosen is Filter Change/Inspection, filter units to only those with filters
-    if (chosen_pm == "Filter Change/Inspection") {
-        chosenSite = chosenSite.filter(function(e) {
-            return e.Filter1Qty != "";
-        });
+    switch(chosen_pm) {
+        case 'Filter Change/Inspection':
+            chosenSite = chosenSite.filter(e => e.Filter1 != "");
+            break;
+        case 'Quarterly':
+            chosenSite = chosenSite.filter(e => e.Manufacturer == "Innovent");
+            break;
+        default:
+            chosenSite = chosenSite.filter(e => e.Category != "Indoor" && e.Manufacturer != "Innovent");
     }
 
     ////////////////
@@ -162,9 +168,10 @@ function generateTasking() {
     ///////////
     // Clean up
     ///////////
-    // Hide the Generate button and update equipment list button
+    // Hide the Generate and update buttons and version number
     getField("Submit").hidden = true;
     getField("reload").hidden = true;
+    getField("version").hidden = true;
 
     // Make Site and PM fields read-only
     getField("customer").readonly = true;
